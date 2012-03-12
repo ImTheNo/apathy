@@ -12,3 +12,4 @@ apathy_test
 apathy_test2
 *.swp
 .directory
+apathy_change.c
