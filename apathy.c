@@ -3,6 +3,7 @@
 #include <linux/string.h>
 #include <linux/sched.h>
 #include <linux/selinux.h>
+#include <linux/rwlock.h>
 #include <linux/init.h>
 #include <linux/uprobes.h>
 #include <linux/utrace.h>
@@ -44,6 +45,7 @@ LIST_HEAD(break_list);
 LIST_HEAD(info_list);
 LIST_HEAD(traced_list);
 
+rwlock_t brk_lock, info_lock, traced_lock;
 static struct class *apathy_class;
 static struct device apathy_dev;
 static struct cdev   apathy_cdev;
@@ -62,6 +64,7 @@ static int unreg_bpts(struct task_struct *task)
         return 0;
     }
 
+    write_lock(&brk_lock);
 	list_for_each_safe(pos, q, &break_list) {
 		tmp = list_entry(pos, struct rs_break,list);
 		if (tmp->probe.pid == task->tgid) {
@@ -70,6 +73,7 @@ static int unreg_bpts(struct task_struct *task)
 			kfree(tmp);
 		}
 	}
+    write_unlock(&brk_lock);
 
 	return 0;
 }
@@ -101,7 +105,9 @@ static int set_bpt(const struct rs_info* info)
 		goto out_clean;
 	}
 
+    write_lock(&brk_lock);
 	list_add(&brk->list,&break_list);
+    write_unlock(&brk_lock);
 
 	return 0;
 
@@ -120,6 +126,7 @@ static int detach_engine(struct utrace_engine *engine,
     int ret;
 
 	printk(KERN_INFO "Apathy: detaching engine in %u\n", task->pid);
+    write_lock(&traced_lock);
     list_for_each_safe(t_pos, q, &traced_list)
     {
         t_tmp = list_entry(t_pos, struct traced_pid, list);
@@ -130,6 +137,7 @@ static int detach_engine(struct utrace_engine *engine,
             break;
         }
     }
+    write_unlock(&traced_lock);
 
     if (engine->data) 
     {
@@ -159,6 +167,7 @@ static u32 my_report_exec(u32 action, struct utrace_engine *engine,
                               //is called its first time there are no breaks 
                               //on thread
 
+    read_lock(&info_lock);
 	list_for_each(pos, &info_list) {
 		tmp = list_entry(pos, struct rs_info, list);
 
@@ -179,6 +188,7 @@ static u32 my_report_exec(u32 action, struct utrace_engine *engine,
             }
 		}
 	}
+    read_unlock(&info_lock);
 
     //if thread doesn't use breakpoints, engine will be detached 
     if (not_detached) 
@@ -235,7 +245,9 @@ static u32 my_report_clone(u32 action, struct utrace_engine *engine,
             goto detach_out;
         }
         t_tmp->pid = child->pid;
+        write_lock(&traced_lock);
         list_add(&t_tmp->list, &traced_list);
+        write_unlock(&traced_lock);
 
         if (clone_flags & CLONE_THREAD) 
         {
@@ -277,6 +289,7 @@ static u32 my_report_quiesce(u32 action, struct utrace_engine *engine,
         goto detach_out;
     }
     binfile = (char *)engine->data;
+    read_lock(&info_lock);
 	list_for_each(pos, &info_list) {
 		tmp = list_entry(pos, struct rs_info, list);
 
@@ -286,10 +299,12 @@ static u32 my_report_quiesce(u32 action, struct utrace_engine *engine,
 
 			if (set_bpt(tmp))
             {
+                read_unlock(&info_lock);
                 goto detach_out;
             }
 		}
 	}
+    read_unlock(&info_lock);
 
     ret = utrace_set_events(current, engine, UTRACE_EVENT(EXEC) | UTRACE_EVENT(EXIT)
             | UTRACE_EVENT(CLONE));
@@ -358,6 +373,7 @@ static void uprobe_handler(struct uprobe* u, struct pt_regs *regs)
 	u32 sid;
 
 	printk(KERN_INFO "Apathy: handler\n");
+    read_lock(&brk_lock);
 	list_for_each(pos, &break_list) {
 		tmp = list_entry(pos, struct rs_break, list);
 		if (tmp->probe.vaddr == u->vaddr && tmp->probe.pid == u->pid) {
@@ -370,6 +386,7 @@ static void uprobe_handler(struct uprobe* u, struct pt_regs *regs)
 			if (ret == -EINVAL) {
 				printk("Acedia: Failed to translate context to sid: %s\n",
 						tmp->new_cont);
+                read_unlock(&brk_lock);
 				return;
 			} else {
 				printk("Acedia: Sid for %s is %u\n", tmp->new_cont, sid);
@@ -378,8 +395,8 @@ static void uprobe_handler(struct uprobe* u, struct pt_regs *regs)
             ret = my_kern_setprocattr(tmp->new_cont, strlen(tmp->new_cont));
 			break;
             }
-
     }
+    read_unlock(&brk_lock);
 }
 
 static int handl_sbh(struct linux_binprm *bprm,struct pt_regs *regs)
@@ -391,10 +408,12 @@ static int handl_sbh(struct linux_binprm *bprm,struct pt_regs *regs)
 	int ret;
     char attached = 0;
 
+    read_lock(&info_lock);
 	list_for_each(pos, &info_list) {
 		tmp = list_entry(pos, struct rs_info, list);
 
 		if (!strcmp(bprm->filename,tmp->trans.bin_file)) {
+            read_lock(&traced_lock);
             list_for_each(t_pos, &traced_list)
             {
                 t_tmp = list_entry(t_pos, struct traced_pid, list);
@@ -405,6 +424,7 @@ static int handl_sbh(struct linux_binprm *bprm,struct pt_regs *regs)
                 }
                 
             }
+            read_unlock(&traced_lock);
 
             if (!attached) 
             {
@@ -413,6 +433,7 @@ static int handl_sbh(struct linux_binprm *bprm,struct pt_regs *regs)
 
                 if (!try_module_get(THIS_MODULE)) {
                     ret = EBUSY;
+                    read_unlock(&info_lock);
                     return ret;
                 }
                 engine = utrace_attach_task(current, UTRACE_ATTACH_CREATE, &my_utrace_ops, NULL);
@@ -424,10 +445,13 @@ static int handl_sbh(struct linux_binprm *bprm,struct pt_regs *regs)
                     t_tmp = kzalloc(sizeof(struct traced_pid), GFP_KERNEL);
                     if (!t_tmp) 
                     {
+                        read_unlock(&info_lock);
                         goto detach_out;
                     }
                     t_tmp->pid = current->pid;
+                    write_lock(&traced_lock);
                     list_add(&t_tmp->list, &traced_list);
+                    write_unlock(&traced_lock);
                 } else {
                     module_put(THIS_MODULE);
                     printk(KERN_INFO "Apathy: failed to attach utrace engine\n");
@@ -438,6 +462,7 @@ static int handl_sbh(struct linux_binprm *bprm,struct pt_regs *regs)
 			//set_bpt(tmp);
 		}
 	}
+    read_unlock(&info_lock);
 
 	jprobe_return();
 
@@ -492,6 +517,7 @@ int ioctl_set_break(void __user *p)
 		goto out_clean;
 	}
 
+    read_lock(&info_lock);
 	list_for_each(pos, &info_list) {
 		tmp = list_entry(pos, struct rs_info, list);
 		if (tmp->trans.addr == brk->trans.addr &&
@@ -500,11 +526,15 @@ int ioctl_set_break(void __user *p)
 			printk(KERN_INFO "Apathy: Breakpoint at %p for %s exists.\n",
 					(void*)tmp->trans.addr,tmp->trans.bin_file);
 			ret = -EBUSY;
+            read_unlock(&info_lock);
 			goto out_clean;
 		}
 	}
+    read_unlock(&info_lock);
 
+    write_lock(&info_lock);
 	list_add(&brk->list, &info_list);
+    write_unlock(&info_lock);
 	printk( KERN_INFO "Apathy: Set bpt for %s\n", brk->trans.bin_file);
 
 	return 0;
@@ -680,6 +710,7 @@ static int apathy_init(void)
 		printk(KERN_INFO "Apathy: failed to register device\n");
 		return -EFAULT;
 	}
+    brk_lock = info_lock = traced_lock = RW_LOCK_UNLOCKED;
 
 	my_utrace_ops.report_exec = my_report_exec;
 	my_utrace_ops.report_exit = my_report_exit;
