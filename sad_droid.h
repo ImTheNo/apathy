@@ -1,5 +1,5 @@
-#ifndef APATHY_H
-#define APATHY_H
+#ifndef SAD_DROID_H
+#define SAD_DROID_H
 
 #ifdef __KERNEL__
 #include <linux/ioctl.h>
@@ -17,27 +17,30 @@
 #define NAMELEN 		256
 
 /*FIXME: Check ioctl number */
-#define APATHY_IOCTL_MAGIC 	0x8e
+#define SAD_DROID_IOCTL_MAGIC 	0x8e
 
-/*! \struct apathy_trans
+/* device name, used in /dev and /sys */
+#define SAD_DROID_DEVICE_NAME 	"sad_droid"
+
+/*! \struct sad_droid_trans
   \brief information about context transition point
   */
-struct apathy_trans {
+struct sad_droid_trans {
 	unsigned long addr; 		/*!< address of the break */
 	char new_cont[CONT_MAXLEN]; 	/*!< new context */
 	char bin_file[NAMELEN];		/*!< binary which process to probe */
 };
 	
-/*! \def APATHY_IOCTL_SET_BREAK
+/*! \def sad_droid_IOCTL_SET_BREAK
   \brief set a new context transition control point
   */
-#define APATHY_IOCTL_SET_BREAK \
-	_IOWR(APATHY_IOCTL_MAGIC, 0, struct apathy_trans)
+#define SAD_DROID_IOCTL_SET_BREAK \
+	_IOWR(SAD_DROID_IOCTL_MAGIC, 0, struct sad_droid_trans)
 
-/*! \def APATHY_IOCTL_DEL_BREAK \
+/*! \def SAD_DROID_IOCTL_DEL_BREAK \
   \brief delete context transition control point
   */
-#define APATHY_IOCTL_DEL_BREAK \
-	_IOWR(APATHY_IOCTL_MAGIC, 1, struct apathy_trans)
+#define SAD_DROID_IOCTL_DEL_BREAK \
+	_IOWR(SAD_DROID_IOCTL_MAGIC, 1, struct sad_droid_trans)
 
-#endif /* APATHY_H */
+#endif /* SAD_DROID_H */

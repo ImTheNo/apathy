@@ -1,4 +1,4 @@
-obj-m := apathy.o
+obj-m := sad_droid.o
 
 hostprogs-m += apathy_test
 hostprogs-m += apathy_test2
