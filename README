@@ -1,0 +1,16 @@
+sad_droid
+--------------------------------------------------------------------------------
+
+sad_droid is an implementation of an idea to have somewhat more strict Least
+Privileges Principle in SELinux. It allows system administrator to set separate
+security contexts on various parts of application's code. With this approach,
+when application execute its code, the set of privileges depends on which piece
+of code is executed at the moment. Thus every single function or object can have
+separate rights in the system. This allows to decrease potential harm, whenever
+some part of application was compromised. 
+ 
+sad_droid itself is a Linux Kernel subsystem, which goal is to change SELinux
+security context for a thread, whenever it transits to another piece of code,
+for which security policy dictates separate security context. This transition
+must be told beforehand to the sad_droid throughout special device,
+/dev/sad_droid.
